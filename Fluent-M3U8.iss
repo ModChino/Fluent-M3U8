@@ -76,7 +76,6 @@ Source: "dist/Fluent-M3U8.dist/_socket.pyd"; DestDir: "{app}"; Flags: ignorevers
 Source: "dist/Fluent-M3U8.dist/win32gui.pyd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist/Fluent-M3U8.dist/pythoncom311.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist/Fluent-M3U8.dist/_ctypes.pyd"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist/Fluent-M3U8.dist/zstandard/*"; DestDir: "{app}/zstandard"; Excludes: "__pycache__"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "dist/Fluent-M3U8.dist/_bz2.pyd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist/Fluent-M3U8.dist/qt6core.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist/Fluent-M3U8.dist/select.pyd"; DestDir: "{app}"; Flags: ignoreversion
