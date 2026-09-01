@@ -32,3 +32,7 @@ download/
 .DS_Store
 build/
 dist/
+
+# 忽略虚拟环境
+.venv/
+venv/

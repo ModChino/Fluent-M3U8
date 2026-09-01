@@ -1,4 +1,5 @@
 import functools
+import os
 import warnings
 from typing import Dict, List, Callable
 
@@ -10,7 +11,7 @@ from .task import BaseTask, Task
 
 
 def cpu_count():
-    return 8
+    return os.cpu_count() or 1
 
 
 class BaseTaskExecutor(QObject):

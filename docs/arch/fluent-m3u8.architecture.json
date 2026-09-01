@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Fluent-M3U8 架构总览",
+    "output": "fluent-m3u8-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [1300, 690],
+    "views": [
+      { "id": "download-path", "label": "下载主路径", "focus": ["user", "mainWindow", "view", "service", "m3u8dlBinary"], "note": "从输入链接到 N_m3u8DL-RE 进程的完整下载链路。" },
+      { "id": "async-support", "label": "异步与并发", "focus": ["concurrent", "service"], "note": "QThreadPool 驱动的 Future 回调，承载探测、封面与更新检查。" },
+      { "id": "persistence", "label": "数据持久化", "focus": ["database", "service"], "note": "SQLite 通过独立线程队列处理任务读写，不阻塞 UI。" }
+    ]
+  },
+  "components": [
+    { "id": "user", "type": "external", "label": "用户", "sublabel": "拖拽 / 输入链接", "pos": [30, 500], "size": [110, 64] },
+    { "id": "mainWindow", "type": "frontend", "label": "主窗口 MainWindow", "sublabel": "MSFluentWindow 单例", "pos": [220, 500], "size": [150, 64], "tag": "app/view/main_window.py" },
+    { "id": "view", "type": "frontend", "label": "界面层", "sublabel": "Home / Task / Setting", "pos": [440, 240], "size": [150, 70], "tag": "app/view/*" },
+    { "id": "components", "type": "frontend", "label": "UI 组件", "sublabel": "任务卡 / 配置卡 / 托盘", "pos": [440, 497], "size": [150, 70], "tag": "app/components/*" },
+    { "id": "common", "type": "backend", "label": "公共层", "sublabel": "config / signalBus / 解析器", "pos": [705, 40], "size": [150, 70], "tag": "app/common/*" },
+    { "id": "concurrent", "type": "backend", "label": "线程池并发", "sublabel": "TaskExecutor / Future", "pos": [1000, 40], "size": [150, 70], "tag": "QThreadPool" },
+    { "id": "service", "type": "backend", "label": "服务层", "sublabel": "m3u8dl / ffmpeg / speed", "pos": [700, 320], "size": [160, 70], "tag": "app/service/*" },
+    { "id": "database", "type": "database", "label": "SQLite 数据库", "sublabel": "DatabaseThread / TaskDao", "pos": [1000, 320], "size": [150, 70], "tag": "QSqlDatabase" },
+    { "id": "m3u8dlBinary", "type": "external", "label": "N_m3u8DL-RE", "sublabel": "外部下载进程", "pos": [1000, 560], "size": [150, 64], "tag": "tools/" },
+    { "id": "ffmpegBinary", "type": "external", "label": "FFmpeg", "sublabel": "外部转码进程", "pos": [715, 560], "size": [130, 64], "tag": "tools/" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "GUI 层（PySide6 + QFluentWidgets）", "wraps": ["mainWindow", "view", "components"], "pad": 32 },
+    { "kind": "region", "label": "服务与支撑", "wraps": ["service", "common", "concurrent", "database"], "pad": 32 }
+  ],
+  "connections": [
+    { "id": "user-to-main", "from": "user", "to": "mainWindow", "label": "拖拽 / 链接", "variant": "emphasis", "route": "straight" },
+    { "id": "main-to-view", "from": "mainWindow", "to": "view", "label": "导航切换", "fromSide": "top", "toSide": "left", "labelAt": [355, 370] },
+    { "id": "main-to-components", "from": "mainWindow", "to": "components", "label": "托盘 / 菜单", "route": "straight", "labelDy": -16 },
+    { "id": "view-to-components", "from": "view", "to": "components", "label": "任务卡片", "route": "straight", "labelAt": [530, 400] },
+    { "id": "view-to-service", "from": "view", "to": "service", "label": "发起下载 / 进度", "variant": "emphasis", "route": "orthogonal-h", "fromSide": "right", "toSide": "left", "labelAt": [640, 312] },
+    { "id": "service-to-common", "from": "service", "to": "common", "label": "解析 / 配置", "route": "orthogonal-v", "fromSide": "top", "toSide": "bottom", "labelAt": [700, 170] },
+    { "id": "service-to-concurrent", "from": "service", "to": "concurrent", "label": "异步任务", "route": "orthogonal-h", "fromSide": "right", "toSide": "left", "labelAt": [925, 210] },
+    { "id": "service-to-db", "from": "service", "to": "database", "label": "任务落库", "route": "straight", "labelAt": [962, 338] },
+    { "id": "service-to-m3u8dl", "from": "service", "to": "m3u8dlBinary", "label": "QProcess 启动", "variant": "emphasis", "route": "orthogonal-v", "fromSide": "bottom", "toSide": "top", "labelAt": [870, 490] },
+    { "id": "service-to-ffmpeg", "from": "service", "to": "ffmpegBinary", "label": "提取封面", "route": "orthogonal-v", "fromSide": "bottom", "toSide": "top", "labelAt": [775, 510] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "下载主路径", "items": ["URL 经界面层进入服务层，组装 N_m3u8DL-RE 命令行参数", "M3U8DLService 用 QProcess 启动外部下载器并解析进度回传", "任务结束时调用 FFmpeg 提取视频封面"] },
+    { "dot": "emerald", "title": "并发与持久化", "items": ["TaskExecutor 基于 QThreadPool + Future 信号回调，承载探测/封面/更新检查", "数据库读写走独立 DatabaseThread 队列，通过 SqlSignalBus 回传 UI", "Task 实体以命令串重放，支持重下载"] },
+    { "dot": "amber", "title": "主要观察点", "items": ["QEventLoop.exec() 阻塞等待直播探测结果，位于 UI 路径", "下载进度依赖正则解析 N_m3u8DL-RE 输出，版本变化时脆弱", "UI 与配置通过全局 cfg 单例直接耦合"] }
+  ]
+}

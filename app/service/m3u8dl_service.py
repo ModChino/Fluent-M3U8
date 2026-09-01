@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 import shutil
 
-from PySide6.QtCore import Qt, Signal, QProcess, QObject, QDateTime, QEventLoop
+from PySide6.QtCore import Qt, Signal, QProcess, QObject, QDateTime
 import m3u8
 
 from ..common.logger import Logger
@@ -175,6 +175,63 @@ class M3U8DLCommandLineParser(QObject):
         return task
 
 
+# N_m3u8DL-RE 进度行正则。工具升级导致输出格式变化时，
+# 解析函数会静默跳过（返回 None），而不是抛异常或崩溃。
+_VOD_PROGRESS_REGEX = re.compile(
+    r"(\d+)\s*/\s*(\d+)\s+(\d+(?:\.\d+)?)%\s+"
+    r"(\d+(?:\.\d+)?)\s*(KB|MB|GB)/(\d+(?:\.\d+)?)\s*(KB|MB|GB)\s+"
+    r"(\d+(?:\.\d+)?)\s*(GBps|MBps|KBps|Bps)\s+(.+)"
+)
+_LIVE_PROGRESS_REGEX = re.compile(
+    r"(\d{2}m\d{2}s)\s*/\s*(\d{2}m\d{2}s)\s+(\d+/\d+)\s+"
+    r"(Recording|Waiting)\s+(\d+)%\s+(-|(\d+(?:\.\d+)?)\s*(GBps|MBps|KBps|Bps))"
+)
+
+
+def parseVODProgress(message: str) -> Optional[VODDownloadProgressInfo]:
+    """ parse N_m3u8DL-RE's VOD download progress message
+
+    解析失败（格式不识别）时返回 None，调用方静默跳过。
+    """
+    match = _VOD_PROGRESS_REGEX.search(message)
+    if not match:
+        return None
+
+    info = VODDownloadProgressInfo(
+        currentChunk=int(match[1]),
+        totalChunks=int(match[2]),
+        currentSize=match[4] + match[5],
+        totalSize=match[6] + match[7],
+        speed=match[8] + match[9],
+        remainTime=match[10],
+    )
+    info.speed = info.speed.replace("KBps", "KB/s").replace("MBps", "MB/s").replace("GBps", "GB/s")
+    return info
+
+
+def parseLiveProgress(message: str) -> Optional[LiveDownloadProgressInfo]:
+    """ parse N_m3u8DL-RE's live download progress message
+
+    解析失败（格式不识别）时返回 None，调用方静默跳过。
+    """
+    match = _LIVE_PROGRESS_REGEX.search(message)
+    if not match:
+        return None
+
+    speed = match[6]
+    if match[7] is not None:
+        speed = match[7] + match[8]
+        speed = speed.replace("KBps", "KB/s").replace("MBps", "MB/s").replace("GBps", "GB/s")
+
+    return LiveDownloadProgressInfo(
+        currentTime=match[1],
+        totalTime=match[2],
+        status=match[4],
+        percent=int(match[5]),
+        speed=speed,
+    )
+
+
 class M3U8DLService(QObject):
 
     downloadCreated = Signal(Task)
@@ -198,15 +255,23 @@ class M3U8DLService(QObject):
         options = self.generateCommand(options)
         task = self.cmdParser.parse(options)
 
-        # determine live recording
+        # determine live recording asynchronously, then continue via callback
         if not parser:
             parser = MediaParser.parse(task.url)
 
         if parser:
-            eventLoop = QEventLoop(self)
-            TaskExecutor.runTask(parser.isLive).then(lambda isLive: self._onLiveInfoFetched(isLive, task, eventLoop))
-            eventLoop.exec()
+            TaskExecutor.runTask(parser.isLive).then(
+                lambda isLive: self._onLiveInfoFetched(isLive, task, options),
+                lambda e: self._onLiveInfoFetched(False, task, options),
+            )
+        else:
+            self._startDownload(options, task)
 
+        return True
+
+    @exceptionTracebackHandler("download")
+    def _startDownload(self, options: List[str], task: Task):
+        """ start the N_m3u8dl-RE process (called after live info is fetched) """
         # auto rename
         currentTime = task.createTime.toString("yyyy-MM-dd_hh-mm-ss")
         if task.hasAvailableVideo():
@@ -236,7 +301,6 @@ class M3U8DLService(QObject):
         process.setProperty("task", task)
         self.processMap[task.pid] = process
         self.downloadCreated.emit(task)
-        return True
 
     def _setupEnv(self, process: QProcess):
         env = process.systemEnvironment()
@@ -257,41 +321,19 @@ class M3U8DLService(QObject):
         if 'WARN' in message:
             return
 
-        # parse progress message
+        # parse progress message (unknown format is silently skipped)
         if not task.isLive:
-            regex = r"(\d+)\/(\d+)\s+(\d+\.\d+)%\s+(\d+\.\d+)(KB|MB|GB)\/(\d+\.\d+)(KB|MB|GB)\s+(\d+\.\d+)(GBps|MBps|KBps|Bps)\s(.+)"
-            match = re.search(regex, message)
-
-            if not match:
-                return
-
-            info = VODDownloadProgressInfo(
-                currentChunk=int(match[1]),
-                totalChunks=int(match[2]),
-                currentSize=match[4]+match[5],
-                totalSize=match[6]+match[7],
-                speed=match[8]+match[9],
-                remainTime=match[10]
-            )
-            task.size = info.totalSize
-            info.speed = info.speed.replace("KBps", "KB/s").replace("MBps", "MB/s").replace("GBps", "GB/s")
-            self.downloadProgressChanged.emit(task, info)
+            info = parseVODProgress(message)
         else:
-            regex = r"(\d{2}m\d{2}s)/(\d{2}m\d{2}s)\s(\d+/\d+)\s(Recording|Waiting)\s+(\d+)%\s(-|(\d+\.\d+)(GBps|MBps|KBps|Bps))"
-            match = re.search(regex, message)
+            info = parseLiveProgress(message)
 
-            if not match:
-                return
+        if not info:
+            return
 
-            info = LiveDownloadProgressInfo(
-                currentTime=match[1],
-                totalTime=match[2],
-                status=match[4],
-                percent=int(match[5]),
-                speed=match[6],
-            )
-            info.speed = info.speed.replace("KBps", "KB/s").replace("MBps", "MB/s").replace("GBps", "GB/s")
-            self.downloadProgressChanged.emit(task, info)
+        if isinstance(info, VODDownloadProgressInfo):
+            task.size = info.totalSize
+
+        self.downloadProgressChanged.emit(task, info)
 
     def _onDownloadFinished(self, process: QProcess, task: Task, code, status: QProcess.ExitStatus):
         if task.pid not in self.processMap:
@@ -333,9 +375,10 @@ class M3U8DLService(QObject):
 
         self.processMap.clear()
 
-    def _onLiveInfoFetched(self, isLive: bool, task: Task, eventLoop: QEventLoop):
+    def _onLiveInfoFetched(self, isLive: bool, task: Task, options: List[str]):
+        """ continue download after live info is fetched (callback) """
         task.isLive = isLive
-        eventLoop.quit()
+        self._startDownload(options, task)
 
     @property
     def downloaderPath(self):
