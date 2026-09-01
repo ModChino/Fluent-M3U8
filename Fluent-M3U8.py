@@ -7,10 +7,18 @@ from pathlib import Path
 os.chdir(Path(getsourcefile(lambda: 0)).resolve().parent)
 
 # Nuitka standalone compiles certifi into the binary, breaking its
-# __file__-based cacert.pem lookup (ImportError at startup). Point
-# requests at the data file shipped next to the executable instead.
+# importlib.resources-based cacert.pem lookup (ImportError at startup).
+# Shunt certifi with a stub whose where() points at the cacert.pem data
+# file shipped next to the executable, before requests is imported.
 _certifi_bundle = Path(os.getcwd()) / "certifi" / "cacert.pem"
-if _certifi_bundle.exists():
+if _certifi_bundle.exists() and "certifi" not in sys.modules:
+    import types
+
+    _certifi = types.ModuleType("certifi")
+    _certifi.where = lambda: str(_certifi_bundle)
+    _certifi.contents = lambda: _certifi_bundle.read_text(encoding="ascii")
+    _certifi.__version__ = "stub"
+    sys.modules["certifi"] = _certifi
     os.environ["REQUESTS_CA_BUNDLE"] = str(_certifi_bundle)
 
 from PySide6.QtCore import Qt, QTranslator
